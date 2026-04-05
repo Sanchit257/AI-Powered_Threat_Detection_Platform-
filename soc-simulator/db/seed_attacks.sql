@@ -1,0 +1,22 @@
+-- Attack-pattern style logs (20 rows). Apply after schema exists.
+INSERT INTO logs (timestamp, source_ip, destination_ip, destination_port, protocol, event_type, bytes_transferred, username, raw_message) VALUES
+('2026-04-05T18:54:50+00:00', '192.168.66.88', '10.0.0.12', 21, 'TCP', 'connection_attempt', 122, NULL, 'SYN to 21 from scanner; no prior service session'),
+('2026-04-05T18:57:50+00:00', '192.168.66.88', '10.0.0.12', 23, 'TCP', 'connection_attempt', 78, NULL, 'SYN to 23 from scanner; no prior service session'),
+('2026-04-05T19:00:50+00:00', '192.168.66.88', '10.0.0.12', 25, 'TCP', 'connection_attempt', 141, NULL, 'SYN to 25 from scanner; no prior service session'),
+('2026-04-05T19:03:50+00:00', '192.168.66.88', '10.0.0.12', 135, 'TCP', 'connection_attempt', 52, NULL, 'SYN to 135 from scanner; no prior service session'),
+('2026-04-05T19:06:50+00:00', '192.168.66.88', '10.0.0.12', 139, 'TCP', 'connection_attempt', 58, NULL, 'SYN to 139 from scanner; no prior service session'),
+('2026-04-05T19:09:50+00:00', '192.168.66.88', '10.0.0.12', 445, 'TCP', 'connection_attempt', 177, NULL, 'SYN to 445 from scanner; no prior service session'),
+('2026-04-05T19:12:50+00:00', '192.168.66.88', '10.0.0.12', 1433, 'TCP', 'connection_attempt', 64, NULL, 'SYN to 1433 from scanner; no prior service session'),
+('2026-04-05T19:15:50+00:00', '192.168.66.88', '10.0.0.12', 3306, 'TCP', 'connection_attempt', 133, NULL, 'SYN to 3306 from scanner; no prior service session'),
+('2026-04-05T19:18:50+00:00', '192.168.66.88', '10.0.0.12', 3389, 'TCP', 'connection_attempt', 189, NULL, 'SYN to 3389 from scanner; no prior service session'),
+('2026-04-05T19:21:50+00:00', '192.168.66.88', '10.0.0.12', 5900, 'TCP', 'connection_attempt', 54, NULL, 'SYN to 5900 from scanner; no prior service session'),
+('2026-04-05T19:24:50+00:00', '192.168.66.88', '10.0.0.12', 8080, 'TCP', 'connection_attempt', 169, NULL, 'SYN to 8080 from scanner; no prior service session'),
+('2026-04-05T19:27:50+00:00', '192.168.66.88', '10.0.0.12', 8443, 'TCP', 'connection_attempt', 94, NULL, 'SYN to 8443 from scanner; no prior service session'),
+('2026-04-05T19:30:50+00:00', '192.168.66.88', '10.0.0.12', 9200, 'TCP', 'connection_attempt', 49, NULL, 'SYN to 9200 from scanner; no prior service session'),
+('2026-04-05T19:36:50+00:00', '198.51.100.77', '203.0.113.20', 22, 'TCP', 'ssh_auth_failure', 644, 'root', 'Failed password for root from 198.51.100.77'),
+('2026-04-05T19:39:50+00:00', '198.51.100.77', '203.0.113.20', 22, 'TCP', 'ssh_auth_failure', 628, 'root', 'Failed password for root from 198.51.100.77'),
+('2026-04-05T19:42:50+00:00', '198.51.100.77', '203.0.113.20', 22, 'TCP', 'ssh_auth_failure', 271, 'root', 'Failed password for root from 198.51.100.77'),
+('2026-04-05T19:45:50+00:00', '198.51.100.77', '203.0.113.20', 22, 'TCP', 'ssh_auth_failure', 446, 'root', 'Failed password for root from 198.51.100.77'),
+('2026-04-05T19:48:50+00:00', '10.0.5.33', '185.220.101.4', 443, 'TCP', 'https_upload', 524288000, NULL, 'TLS upload spike 500MB to rare ASN in 120s'),
+('2026-04-05T19:51:50+00:00', '192.168.4.10', '45.33.32.156', 4444, 'TCP', 'reverse_shell_candidate', 12000, NULL, 'Outbound persistent TCP 4444 beacon-like traffic'),
+('2026-04-05T19:54:50+00:00', '172.16.8.9', '203.0.113.99', 31337, 'TCP', 'suspicious_port', 4096, NULL, 'Repeated connections to high ephemeral service port 31337');
