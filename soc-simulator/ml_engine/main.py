@@ -13,8 +13,8 @@ from pathlib import Path as PathLib
 from typing import Any
 
 try:
-    import redis
-    import psycopg2
+    import redis  # type: ignore[import-not-found]
+    import psycopg2  # type: ignore[import-not-found]
 except ImportError as e:
     print(f"ml_engine: required package missing: {e}", file=sys.stderr)
     print("Install with: pip install redis==5.0.1 psycopg2-binary==2.9.9", file=sys.stderr)
