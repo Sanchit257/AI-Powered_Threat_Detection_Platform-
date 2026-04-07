@@ -124,8 +124,12 @@ app.add_middleware(
 )
 
 
-def _record_to_dict(r: Any) -> dict[str, Any]:
-    return {k: r[k] for k in r.keys()}
+def _record_to_dict(r) -> dict:
+    d = dict(r)
+    if isinstance(d.get("raw_context"), str):
+        import json
+        d["raw_context"] = json.loads(d["raw_context"])
+    return d
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -153,8 +157,9 @@ async def list_alerts(
         args.append(acknowledged)
         i += 1
     if since:
-        where.append(f"timestamp >= ${i}::timestamptz")
-        args.append(since)
+        parsed_since = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        where.append(f"timestamp >= ${i}")
+        args.append(parsed_since)
         i += 1
     wh = " AND ".join(where)
     total = await pool.fetchval(f"SELECT COUNT(*) FROM alerts WHERE {wh}", *args)
@@ -166,7 +171,7 @@ async def list_alerts(
     )
     alerts = [AlertOut.model_validate(_record_to_dict(r)) for r in rows]
     return AlertsListResponse(alerts=alerts, total=int(total or 0))
-
+    
 
 @app.get("/api/alerts/{alert_id}", response_model=AlertOut)
 async def get_alert(alert_id: UUID) -> AlertOut:
@@ -194,26 +199,30 @@ async def list_logs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     source_ip: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> LogsListResponse:
     pool = await get_pool()
+    q_clean = (q or "").strip()[:200]
+    conditions: list[str] = []
+    args: list[Any] = []
+    i = 1
     if source_ip:
-        total = await pool.fetchval(
-            "SELECT COUNT(*) FROM logs WHERE source_ip = $1",
-            source_ip,
-        )
-        rows = await pool.fetch(
-            "SELECT * FROM logs WHERE source_ip = $1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
-            source_ip,
-            limit,
-            offset,
-        )
-    else:
-        total = await pool.fetchval("SELECT COUNT(*) FROM logs")
-        rows = await pool.fetch(
-            "SELECT * FROM logs ORDER BY timestamp DESC LIMIT $1 OFFSET $2",
-            limit,
-            offset,
-        )
+        conditions.append(f"source_ip = ${i}")
+        args.append(source_ip)
+        i += 1
+    if q_clean:
+        conditions.append(f"raw_message ILIKE ${i}")
+        args.append(f"%{q_clean}%")
+        i += 1
+    where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    total = await pool.fetchval(f"SELECT COUNT(*) FROM logs{where_sql}", *args)
+    lim_p, off_p = i, i + 1
+    rows = await pool.fetch(
+        f"SELECT * FROM logs{where_sql} ORDER BY timestamp DESC LIMIT ${lim_p} OFFSET ${off_p}",
+        *args,
+        limit,
+        offset,
+    )
     logs = [LogOut.model_validate(_record_to_dict(r)) for r in rows]
     return LogsListResponse(logs=logs, total=int(total or 0))
 
@@ -227,6 +236,10 @@ async def get_stats() -> StatsResponse:
     critical_alerts_24h = await pool.fetchval(
         """SELECT COUNT(*) FROM alerts
            WHERE timestamp >= NOW() - INTERVAL '24 hours' AND severity >= 8"""
+    )
+    active_sources_24h = await pool.fetchval(
+        """SELECT COUNT(DISTINCT source_ip) FROM alerts
+           WHERE timestamp >= NOW() - INTERVAL '24 hours' AND source_ip IS NOT NULL"""
     )
     top_rows = await pool.fetch(
         """SELECT source_ip AS ip, COUNT(*)::int AS count FROM alerts
@@ -255,6 +268,7 @@ async def get_stats() -> StatsResponse:
     return StatsResponse(
         total_alerts_24h=int(total_alerts_24h or 0),
         critical_alerts_24h=int(critical_alerts_24h or 0),
+        active_sources_24h=int(active_sources_24h or 0),
         top_source_ips=top_source_ips,
         alerts_by_hour=alerts_by_hour,
         severity_distribution=severity_distribution,

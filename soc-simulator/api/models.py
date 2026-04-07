@@ -72,6 +72,7 @@ class SeverityBucket(BaseModel):
 class StatsResponse(BaseModel):
     total_alerts_24h: int
     critical_alerts_24h: int
+    active_sources_24h: int
     top_source_ips: list[TopSourceIp]
     alerts_by_hour: list[HourBucket]
     severity_distribution: list[SeverityBucket]
