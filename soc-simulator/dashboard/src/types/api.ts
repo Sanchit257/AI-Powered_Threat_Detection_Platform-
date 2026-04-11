@@ -11,6 +11,9 @@ export interface Alert {
   source_ip?: string | null;
   mitre_tactic?: string | null;
   mitre_technique?: string | null;
+  technique_id?: string | null;
+  confidence?: number | null;
+  recommended_action?: string | null;
   explanation?: string | null;
   raw_context?: Record<string, unknown> | null;
   acknowledged: boolean;

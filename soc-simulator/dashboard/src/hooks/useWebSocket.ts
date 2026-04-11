@@ -7,6 +7,99 @@ const MAX_ALERTS = 200;
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
 
+function getField(
+  obj: Record<string, unknown>,
+  snake: string,
+  camel: string
+): unknown {
+  if (
+    snake in obj &&
+    obj[snake] !== undefined &&
+    obj[snake] !== null
+  ) {
+    return obj[snake];
+  }
+  if (
+    camel in obj &&
+    obj[camel] !== undefined &&
+    obj[camel] !== null
+  ) {
+    return obj[camel];
+  }
+  return undefined;
+}
+
+function toNum(v: unknown, fallback: number): number {
+  if (typeof v === "number" && !Number.isNaN(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (!Number.isNaN(n)) return n;
+  }
+  return fallback;
+}
+
+/** Normalize WebSocket alert payloads (camelCase from API) to internal Alert shape. */
+function normalizeWsAlertPayload(o: Record<string, unknown>): Alert | null {
+  const idVal = getField(o, "id", "id");
+  const id = idVal != null ? String(idVal) : "";
+
+  const tsVal = getField(o, "timestamp", "timestamp");
+  const timestamp =
+    tsVal != null ? String(tsVal) : new Date().toISOString();
+
+  const severity = Math.max(
+    0,
+    Math.min(10, Math.round(toNum(getField(o, "severity", "severity"), 0)))
+  );
+  const anomaly_score = toNum(
+    getField(o, "anomaly_score", "anomalyScore"),
+    severity
+  );
+
+  const strOrNull = (v: unknown): string | null =>
+    v == null || v === "" ? null : String(v);
+
+  const ack = getField(o, "acknowledged", "acknowledged");
+  const acknowledged =
+    ack === true || ack === "true" || ack === 1 || ack === "1";
+
+  const out: Alert = {
+    id: id || crypto.randomUUID(),
+    timestamp,
+    severity,
+    anomaly_score,
+    model_used: strOrNull(getField(o, "model_used", "modelUsed")),
+    event_type: strOrNull(getField(o, "event_type", "eventType")),
+    source_ip: strOrNull(getField(o, "source_ip", "sourceIp")),
+    mitre_tactic: strOrNull(getField(o, "mitre_tactic", "mitreTactic")),
+    mitre_technique: strOrNull(
+      getField(o, "mitre_technique", "mitreTechnique")
+    ),
+    technique_id: strOrNull(getField(o, "technique_id", "techniqueId")),
+    confidence: (() => {
+      const c = getField(o, "confidence", "confidence");
+      if (c === undefined || c === null) return null;
+      return toNum(c, 0);
+    })(),
+    recommended_action: strOrNull(
+      getField(o, "recommended_action", "recommendedAction")
+    ),
+    explanation: strOrNull(getField(o, "explanation", "explanation")),
+    raw_context:
+      (getField(o, "raw_context", "rawContext") as Record<
+        string,
+        unknown
+      > | null) ?? null,
+    acknowledged,
+    created_at: strOrNull(getField(o, "created_at", "createdAt")),
+  };
+
+  if (!id && !getField(o, "event_type", "eventType") && severity === 0) {
+    return null;
+  }
+  return out;
+}
+
 function getWsBaseUrl(): string {
   const override = import.meta.env.VITE_WS_URL?.trim();
   if (override) return override.replace(/\/$/, "");
@@ -29,29 +122,22 @@ function parseMessage(raw: string): Alert[] {
   const o = data as Record<string, unknown>;
   if (o.type === "initial" && Array.isArray(o.alerts)) {
     const msg = data as WsInitialMessage;
-    return msg.alerts.slice(0, MAX_ALERTS);
+    const normalized: Alert[] = [];
+    for (const item of msg.alerts) {
+      if (item && typeof item === "object") {
+        const a = normalizeWsAlertPayload(
+          item as unknown as Record<string, unknown>
+        );
+        if (a) normalized.push(a);
+      }
+    }
+    return normalized.slice(0, MAX_ALERTS);
   }
 
-  if (typeof o.id === "string" && typeof o.timestamp === "string") {
-    return [data as Alert];
-  }
+  const normalizedOne = normalizeWsAlertPayload(o);
+  if (normalizedOne) return [normalizedOne];
 
-  const id = crypto.randomUUID();
-  const timestamp = new Date().toISOString();
-  const partial: Alert = {
-    id,
-    timestamp,
-    severity: Math.max(0, Math.min(10, Number(o.severity ?? 0))),
-    anomaly_score: Number(o.anomaly_score ?? o.severity ?? 0),
-    event_type: typeof o.event_type === "string" ? o.event_type : null,
-    source_ip: typeof o.source_ip === "string" ? o.source_ip : null,
-    mitre_tactic: typeof o.mitre_tactic === "string" ? o.mitre_tactic : null,
-    mitre_technique: typeof o.mitre_technique === "string" ? o.mitre_technique : null,
-    explanation: typeof o.explanation === "string" ? o.explanation : null,
-    acknowledged: false,
-    raw_context: null,
-  };
-  return [partial];
+  return [];
 }
 
 function mergePrepend(prev: Alert[], incoming: Alert[]): Alert[] {
