@@ -1,5 +1,5 @@
 import { subHours } from "date-fns";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Download } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { ApiError, fetchAlerts } from "@/api/client";
+import { ApiError, fetchAlerts, getAlertsExportUrl } from "@/api/client";
 import { AlertDetailModal } from "@/components/AlertDetailModal";
 import { SeverityBadge } from "@/components/SeverityBadge";
 import { Button } from "@/components/ui/button";
@@ -153,11 +153,25 @@ export function Alerts() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
-        <p className="text-sm text-muted">
-          Filter, sort, and drill into detections
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
+          <p className="text-sm text-muted">
+            Filter, sort, and drill into detections
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-2"
+          onClick={() => {
+            window.open(getAlertsExportUrl(), "_blank", "noopener,noreferrer");
+          }}
+        >
+          <Download className="h-4 w-4" aria-hidden />
+          Export CSV (24h)
+        </Button>
       </div>
 
       <Card className="border-border bg-card">

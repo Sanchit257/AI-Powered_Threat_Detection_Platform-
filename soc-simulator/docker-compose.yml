@@ -3,6 +3,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - soc-net
 
@@ -27,7 +32,9 @@ services:
       - soc-net
 
   simulator:
-    build: ./simulator
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
     env_file:
       - .env
     environment:
@@ -35,14 +42,16 @@ services:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       db:
         condition: service_healthy
     networks:
       - soc-net
 
   ml_engine:
-    build: ./ml_engine
+    build:
+      context: .
+      dockerfile: ml_engine/Dockerfile
     env_file:
       - .env
     environment:
@@ -51,7 +60,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       db:
         condition: service_healthy
     networks:
@@ -71,9 +80,15 @@ services:
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - soc-net
 
@@ -81,10 +96,13 @@ services:
     build: ./dashboard
     ports:
       - "3000:3000"
+    env_file:
+      - ./dashboard/.env
     environment:
       NODE_ENV: development
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - soc-net
 
@@ -95,8 +113,10 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - api
-      - dashboard
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
     networks:
       - soc-net
 

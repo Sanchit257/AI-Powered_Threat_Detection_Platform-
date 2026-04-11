@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import os
 from contextlib import asynccontextmanager
@@ -20,6 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import redis.asyncio as aioredis
 
 from database import close_pool, get_pool, init_pool
@@ -28,15 +31,20 @@ from models import (
     AlertsListResponse,
     HealthResponse,
     HourBucket,
+    InjectAttackResponse,
     LogOut,
     LogsListResponse,
     SeverityBucket,
+    SeverityHeatmapResponse,
     StatsResponse,
     TopSourceIp,
 )
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 ALERT_CHANNEL = "alerts:live"
+LOGS_STREAM_KEY = "logs:raw"
+STATS_CACHE_KEY = "soc:stats:v1"
+STATS_CACHE_TTL_SEC = 30
 
 redis_client: aioredis.Redis | None = None
 _broadcast_task: asyncio.Task | None = None
@@ -90,6 +98,11 @@ async def redis_subscriber_loop() -> None:
                         )
                 except json.JSONDecodeError:
                     pass
+                if redis_client is not None:
+                    try:
+                        await redis_client.delete(STATS_CACHE_KEY)
+                    except Exception:
+                        pass
                 await ws_manager.broadcast(data)
     except asyncio.CancelledError:
         raise
@@ -295,8 +308,7 @@ async def list_logs(
     return LogsListResponse(logs=logs, total=int(total or 0))
 
 
-@app.get("/api/stats", response_model=StatsResponse)
-async def get_stats() -> StatsResponse:
+async def _compute_stats() -> StatsResponse:
     pool = await get_pool()
     total_alerts_24h = await pool.fetchval(
         """SELECT COUNT(*) FROM alerts WHERE timestamp >= NOW() - INTERVAL '24 hours'"""
@@ -340,6 +352,155 @@ async def get_stats() -> StatsResponse:
         top_source_ips=top_source_ips,
         alerts_by_hour=alerts_by_hour,
         severity_distribution=severity_distribution,
+    )
+
+
+@app.get("/api/stats", response_model=StatsResponse)
+async def get_stats() -> StatsResponse:
+    if redis_client is not None:
+        try:
+            cached = await redis_client.get(STATS_CACHE_KEY)
+            if cached:
+                return StatsResponse.model_validate_json(cached)
+        except Exception:
+            pass
+    stats = await _compute_stats()
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                STATS_CACHE_KEY,
+                stats.model_dump_json(),
+                ex=STATS_CACHE_TTL_SEC,
+            )
+        except Exception:
+            pass
+    return stats
+
+
+@app.get("/api/stats/heatmap", response_model=SeverityHeatmapResponse)
+async def get_stats_heatmap() -> SeverityHeatmapResponse:
+    pool = await get_pool()
+    top_ips_rows = await pool.fetch(
+        """SELECT source_ip AS ip FROM alerts
+           WHERE timestamp >= NOW() - INTERVAL '24 hours' AND source_ip IS NOT NULL
+           GROUP BY source_ip ORDER BY COUNT(*) DESC LIMIT 10"""
+    )
+    ips = [str(r["ip"]) for r in top_ips_rows]
+    if not ips:
+        return SeverityHeatmapResponse(source_ips=[], matrix=[])
+
+    rows = await pool.fetch(
+        """
+        SELECT a.source_ip AS ip,
+               EXTRACT(HOUR FROM a.timestamp AT TIME ZONE 'UTC')::int AS hr,
+               MAX(a.severity)::int AS max_sev
+        FROM alerts a
+        WHERE a.timestamp >= NOW() - INTERVAL '24 hours'
+          AND a.source_ip = ANY($1::text[])
+        GROUP BY a.source_ip, hr
+        """,
+        ips,
+    )
+    by_ip_hr: dict[str, dict[int, int]] = {ip: {} for ip in ips}
+    for r in rows:
+        ip = str(r["ip"])
+        hr = int(r["hr"])
+        if 0 <= hr <= 23:
+            by_ip_hr.setdefault(ip, {})[hr] = int(r["max_sev"])
+
+    matrix: list[list[int]] = []
+    for ip in ips:
+        row = [by_ip_hr.get(ip, {}).get(h, 0) for h in range(24)]
+        matrix.append(row)
+
+    return SeverityHeatmapResponse(source_ips=ips, matrix=matrix)
+
+
+@app.post("/api/debug/inject-attack", response_model=InjectAttackResponse)
+async def inject_attack() -> InjectAttackResponse:
+    """Demo: push a high-signal attack-shaped log to Redis Stream logs:raw."""
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    log = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "source_ip": "203.0.113.77",
+        "destination_ip": "10.0.0.5",
+        "destination_port": 31337,
+        "protocol": "TCP",
+        "event_type": "port_scan",
+        "bytes_transferred": 999_999_999,
+        "username": None,
+        "raw_message": "demo inject: multi-port scan + anomalous volume (portfolio)",
+    }
+    try:
+        sid = await redis_client.xadd(
+            LOGS_STREAM_KEY,
+            {"data": json.dumps(log)},
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Redis XADD failed: {e}"
+        ) from e
+    return InjectAttackResponse(ok=True, stream_id=str(sid))
+
+
+@app.get("/api/alerts/export")
+async def export_alerts_csv() -> StreamingResponse:
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT id, timestamp, severity, anomaly_score, event_type, source_ip,
+               mitre_tactic, mitre_technique, technique_id, acknowledged, explanation
+        FROM alerts
+        WHERE timestamp >= NOW() - INTERVAL '24 hours'
+        ORDER BY timestamp DESC
+        """
+    )
+
+    def generate() -> Any:
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(
+            [
+                "id",
+                "timestamp",
+                "severity",
+                "anomaly_score",
+                "event_type",
+                "source_ip",
+                "mitre_tactic",
+                "mitre_technique",
+                "technique_id",
+                "acknowledged",
+                "explanation",
+            ]
+        )
+        yield buf.getvalue()
+        for r in rows:
+            buf.seek(0)
+            buf.truncate(0)
+            w.writerow(
+                [
+                    str(r["id"]),
+                    r["timestamp"].isoformat() if r["timestamp"] else "",
+                    r["severity"],
+                    r["anomaly_score"],
+                    r["event_type"] or "",
+                    r["source_ip"] or "",
+                    r["mitre_tactic"] or "",
+                    r["mitre_technique"] or "",
+                    r["technique_id"] or "",
+                    r["acknowledged"],
+                    (r["explanation"] or "").replace("\n", " ").replace("\r", " "),
+                ]
+            )
+            yield buf.getvalue()
+
+    fn = f"alerts-export-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.csv"
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
 
 

@@ -1,7 +1,9 @@
 import type {
   Alert,
   AlertsListResponse,
+  InjectAttackResponse,
   LogsListResponse,
+  SeverityHeatmapResponse,
   StatsResponse,
 } from "@/types/api";
 
@@ -77,6 +79,24 @@ export function fetchStats(): Promise<StatsResponse> {
   return fetch(`${BASE_URL}/stats`).then((r) =>
     parseJson<StatsResponse>(r)
   );
+}
+
+export function fetchSeverityHeatmap(): Promise<SeverityHeatmapResponse> {
+  return fetch(`${BASE_URL}/stats/heatmap`).then((r) =>
+    parseJson<SeverityHeatmapResponse>(r)
+  );
+}
+
+/** Demo: enqueue a synthetic high-signal log on `logs:raw` (processed by ml_engine). */
+export function injectDebugAttack(): Promise<InjectAttackResponse> {
+  return fetch(`${BASE_URL}/debug/inject-attack`, { method: "POST" }).then(
+    (r) => parseJson<InjectAttackResponse>(r)
+  );
+}
+
+/** Absolute URL for CSV download (last 24h alerts). Open or assign to `window.location`. */
+export function getAlertsExportUrl(): string {
+  return `${BASE_URL.replace(/\/$/, "")}/alerts/export`;
 }
 
 export interface FetchLogsParams {

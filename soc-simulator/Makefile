@@ -1,4 +1,4 @@
-.PHONY: up down logs seed
+.PHONY: up down logs seed bootstrap
 
 up:
 	docker compose up --build
@@ -10,4 +10,10 @@ logs:
 	docker compose logs -f
 
 seed:
-	docker compose run --rm simulator python main.py --once
+	bash scripts/seed.sh
+
+bootstrap:
+	docker compose up --build -d
+	@echo "Waiting for API healthcheck..."
+	@sleep 8
+	bash scripts/seed.sh

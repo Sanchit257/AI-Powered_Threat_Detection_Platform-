@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import sys
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
-from pathlib import Path as PathLib
 from typing import Any
 
 try:
@@ -26,6 +24,8 @@ from psycopg2.extras import Json, RealDictCursor
 from explanation_agent import get_explanation
 from isolation_forest_model import IsolationForestDetector
 from lstm_model import LSTMDetector, SEQ_LEN
+from slack_notify import notify_slack_if_critical
+from training import ensure_models_or_train
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -37,11 +37,6 @@ ALERT_THRESHOLD = 6.0
 IF_WEIGHT = 0.6
 LSTM_WEIGHT = 0.4
 
-BASE_DIR = PathLib(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "models"
-IF_PATH = MODEL_DIR / "iforest.joblib"
-LSTM_PATH = MODEL_DIR / "lstm.pt"
-
 
 def _parse_log_ts(ts: str) -> datetime:
     if not ts:
@@ -50,73 +45,11 @@ def _parse_log_ts(ts: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
-def synthetic_normal_log(rng: random.Random) -> dict[str, Any]:
-    port = rng.choice([80, 443, 22, 53, 21])
-    proto = "UDP" if port == 53 else "TCP"
-    et_map = {
-        80: "http_request",
-        443: "http_request",
-        22: "ssh_login",
-        53: "dns_query",
-        21: "ftp_transfer",
-    }
-    bt = rng.randint(500, 40_000) if port != 53 else rng.randint(80, 400)
-    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    return {
-        "timestamp": ts,
-        "source_ip": f"192.168.{rng.randint(0, 255)}.{rng.randint(1, 254)}",
-        "destination_ip": f"10.0.{rng.randint(0, 5)}.{rng.randint(1, 200)}",
-        "destination_port": port,
-        "protocol": proto,
-        "event_type": et_map[port],
-        "bytes_transferred": bt,
-        "username": rng.choice([None, None, "svc_account"]),
-        "raw_message": f"synthetic normal {port} len={bt}",
-    }
-
-
-def build_training_corpus(rng: random.Random) -> tuple[list[dict], list[list[dict]]]:
-    logs = [synthetic_normal_log(rng) for _ in range(500)]
-    sequences: list[list[dict]] = []
-    for _ in range(250):
-        src = f"10.{rng.randint(0, 50)}.{rng.randint(0, 255)}.{rng.randint(1, 200)}"
-        seq = []
-        for __ in range(SEQ_LEN):
-            e = synthetic_normal_log(rng)
-            e["source_ip"] = src
-            seq.append(e)
-        sequences.append(seq)
-    return logs, sequences
-
-
 def ensure_models(if_det: IsolationForestDetector, lstm_det: LSTMDetector) -> None:
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    rng = random.Random(42)
-    corpus: tuple[list[dict], list[list[dict]]] | None = None
-
-    def get_corpus() -> tuple[list[dict], list[list[dict]]]:
-        nonlocal corpus
-        if corpus is None:
-            corpus = build_training_corpus(rng)
-        return corpus
-
-    if IF_PATH.exists():
-        if_det.load(str(IF_PATH))
-        print("ml_engine: loaded IsolationForest from disk", file=sys.stderr)
-    else:
-        logs, _ = get_corpus()
-        if_det.train(logs)
-        if_det.save(str(IF_PATH))
-        print("ml_engine: trained IsolationForest on synthetic normals", file=sys.stderr)
-
-    if LSTM_PATH.exists():
-        lstm_det.load(str(LSTM_PATH))
-        print("ml_engine: loaded LSTM from disk", file=sys.stderr)
-    else:
-        _, sequences = get_corpus()
-        lstm_det.train(sequences)
-        lstm_det.save(str(LSTM_PATH))
-        print("ml_engine: trained LSTM autoencoder on synthetic sequences", file=sys.stderr)
+    if not DATABASE_URL:
+        print("ml_engine: DATABASE_URL required for model training", file=sys.stderr)
+        sys.exit(1)
+    ensure_models_or_train(if_det, lstm_det, DATABASE_URL)
 
 
 def insert_alert(
@@ -276,6 +209,7 @@ def main() -> None:
                         print(f"ml_engine: insert alert failed: {e}", file=sys.stderr)
                         row = None
                     if row:
+                        notify_slack_if_critical(row, r)
                         try:
                             r.publish(ALERT_CHANNEL, json.dumps(row, default=str))
                         except redis.RedisError as e:

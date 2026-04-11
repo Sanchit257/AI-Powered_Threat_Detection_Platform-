@@ -6,6 +6,8 @@ import type { Alert } from "@/types/api";
 type AlertsStreamValue = {
   alerts: Alert[];
   connected: boolean;
+  liveWsEvents: number;
+  initialLoaded: boolean;
 };
 
 const AlertsStreamContext = createContext<AlertsStreamValue | null>(null);

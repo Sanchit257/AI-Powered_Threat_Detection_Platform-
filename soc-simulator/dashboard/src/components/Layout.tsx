@@ -12,7 +12,7 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   );
 
 export function Layout() {
-  const { connected } = useAlertsStream();
+  const { connected, liveWsEvents } = useAlertsStream();
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -43,7 +43,16 @@ export function Layout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center justify-end gap-2 border-b border-border bg-card/30 px-4">
+        <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-border bg-card/30 px-4">
+          <div
+            className="font-data text-sm tabular-nums text-primary"
+            title="WebSocket messages received (live counter)"
+          >
+            Live events:{" "}
+            <span className="text-lg font-semibold text-foreground">
+              {liveWsEvents.toLocaleString()}
+            </span>
+          </div>
           <span
             className="flex items-center gap-2 text-xs text-muted"
             title={connected ? "Live stream connected" : "Reconnecting…"}

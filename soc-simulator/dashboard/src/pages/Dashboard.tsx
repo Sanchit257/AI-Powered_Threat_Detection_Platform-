@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
-import { ApiError, fetchStats } from "@/api/client";
+import {
+  ApiError,
+  fetchSeverityHeatmap,
+  fetchStats,
+  injectDebugAttack,
+} from "@/api/client";
 import { AlertTimeline } from "@/components/AlertTimeline";
 import { LiveAlertFeed } from "@/components/LiveAlertFeed";
+import { SeverityHeatmap } from "@/components/SeverityHeatmap";
 import { TopSourceIPs } from "@/components/TopSourceIPs";
+import { Button } from "@/components/ui/button";
 import { useAlertsStream } from "@/context/AlertsStreamContext";
 import {
   Card,
@@ -12,27 +20,19 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { StatsResponse } from "@/types/api";
+import type { SeverityHeatmapResponse, StatsResponse } from "@/types/api";
 
 export function Dashboard() {
-  const { alerts } = useAlertsStream();
+  const { alerts, liveWsEvents } = useAlertsStream();
   const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [heatmap, setHeatmap] = useState<SeverityHeatmapResponse | null>(null);
+  const [heatmapLoading, setHeatmapLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [injecting, setInjecting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetchStats()
-      .then((s) => {
-        if (!cancelled) {
-          setStats(s);
-          setError(null);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled)
-          setError(e instanceof ApiError ? e.message : "Failed to load stats");
-      });
-    const t = setInterval(() => {
+    function loadAggregates() {
       fetchStats()
         .then((s) => {
           if (!cancelled) {
@@ -40,23 +40,86 @@ export function Dashboard() {
             setError(null);
           }
         })
-        .catch(() => {});
-    }, 60_000);
+        .catch((e) => {
+          if (!cancelled)
+            setError(
+              e instanceof ApiError ? e.message : "Failed to load stats"
+            );
+        });
+      setHeatmapLoading(true);
+      fetchSeverityHeatmap()
+        .then((h) => {
+          if (!cancelled) {
+            setHeatmap(h);
+            setHeatmapLoading(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setHeatmapLoading(false);
+        });
+    }
+    loadAggregates();
+    const t = setInterval(loadAggregates, 60_000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
   }, []);
 
+  useEffect(() => {
+    if (liveWsEvents === 0) return;
+    const id = setTimeout(() => {
+      fetchStats()
+        .then((s) => setStats(s))
+        .catch(() => {});
+      setHeatmapLoading(true);
+      fetchSeverityHeatmap()
+        .then((h) => {
+          setHeatmap(h);
+          setHeatmapLoading(false);
+        })
+        .catch(() => setHeatmapLoading(false));
+    }, 4_000);
+    return () => clearTimeout(id);
+  }, [liveWsEvents]);
+
+  async function onSimulateAttack() {
+    setInjecting(true);
+    try {
+      const r = await injectDebugAttack();
+      toast.success("Simulate attack", {
+        description: r.message ?? `Stream ${r.stream_id}`,
+      });
+    } catch (e) {
+      toast.error("Inject failed", {
+        description: e instanceof ApiError ? e.message : "Request failed",
+      });
+    } finally {
+      setInjecting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-          Dashboard
-        </h1>
-        <p className="text-sm text-muted">
-          Last 24 hours overview and live feed
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            Dashboard
+          </h1>
+          <p className="text-sm text-muted">
+            Last 24 hours overview and live feed
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={injecting}
+          onClick={() => void onSimulateAttack()}
+          title="POST /api/debug/inject-attack — synthetic port_scan log"
+        >
+          {injecting ? "Injecting…" : "Simulate attack"}
+        </Button>
       </div>
 
       {error && (
@@ -103,6 +166,18 @@ export function Dashboard() {
           </CardHeader>
         </Card>
       </div>
+
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="text-base">Severity heatmap</CardTitle>
+          <CardDescription>
+            Top sources × hour (UTC) — max severity per cell
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SeverityHeatmap data={heatmap} loading={heatmapLoading} />
+        </CardContent>
+      </Card>
 
       <Card className="border-border bg-card">
         <CardHeader>

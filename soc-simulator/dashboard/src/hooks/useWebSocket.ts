@@ -152,9 +152,17 @@ function mergePrepend(prev: Alert[], incoming: Alert[]): Alert[] {
   return out;
 }
 
-export function useWebSocket(): { alerts: Alert[]; connected: boolean } {
+export function useWebSocket(): {
+  alerts: Alert[];
+  connected: boolean;
+  liveWsEvents: number;
+  initialLoaded: boolean;
+} {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [connected, setConnected] = useState(false);
+  const [liveWsEvents, setLiveWsEvents] = useState(0);
+  /** True after the first `type: "initial"` WebSocket payload (snapshot) is applied. */
+  const [initialLoaded, setInitialLoaded] = useState(false);
   const backoffRef = useRef(INITIAL_BACKOFF_MS);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -183,9 +191,11 @@ export function useWebSocket(): { alerts: Alert[]; connected: boolean } {
         return;
       }
       if (!data || typeof data !== "object") return;
+      setLiveWsEvents((n) => n + 1);
       const o = data as Record<string, unknown>;
       if (o.type === "initial" && Array.isArray(o.alerts)) {
         setAlerts(parseMessage(text));
+        setInitialLoaded(true);
         return;
       }
       const newOnes = parseMessage(text);
@@ -221,5 +231,5 @@ export function useWebSocket(): { alerts: Alert[]; connected: boolean } {
     };
   }, [connect]);
 
-  return { alerts, connected };
+  return { alerts, connected, liveWsEvents, initialLoaded };
 }

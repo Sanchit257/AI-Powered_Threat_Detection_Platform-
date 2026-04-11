@@ -84,3 +84,17 @@ class StatsResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     timestamp: str
+
+
+class SeverityHeatmapResponse(BaseModel):
+    """Top 10 source IPs (rows) x hour UTC 0-23 (cols); cell = max severity in that bucket."""
+
+    source_ips: list[str]
+    hours: list[int] = Field(default_factory=lambda: list(range(24)))
+    matrix: list[list[int]]
+
+
+class InjectAttackResponse(BaseModel):
+    ok: bool
+    stream_id: str
+    message: str = "Attack log injected to logs:raw"

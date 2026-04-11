@@ -78,6 +78,19 @@ export interface StatsResponse {
   severity_distribution: SeverityBucket[];
 }
 
+/** Top source IPs × hour UTC; cell = max severity in that bucket. */
+export interface SeverityHeatmapResponse {
+  source_ips: string[];
+  hours: number[];
+  matrix: number[][];
+}
+
+export interface InjectAttackResponse {
+  ok: boolean;
+  stream_id: string;
+  message?: string;
+}
+
 export interface WsInitialMessage {
   type: "initial";
   alerts: Alert[];
