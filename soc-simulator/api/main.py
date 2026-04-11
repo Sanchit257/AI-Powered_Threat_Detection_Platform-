@@ -82,6 +82,14 @@ async def redis_subscriber_loop() -> None:
             if isinstance(data, bytes):
                 data = data.decode()
             if data:
+                try:
+                    payload = json.loads(data)
+                    if isinstance(payload, dict):
+                        data = json.dumps(
+                            alert_db_row_to_client_json(payload), default=str
+                        )
+                except json.JSONDecodeError:
+                    pass
                 await ws_manager.broadcast(data)
     except asyncio.CancelledError:
         raise
@@ -127,9 +135,69 @@ app.add_middleware(
 def _record_to_dict(r) -> dict:
     d = dict(r)
     if isinstance(d.get("raw_context"), str):
-        import json
         d["raw_context"] = json.loads(d["raw_context"])
     return d
+
+
+def _iso_timestamp(v: Any) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return str(v)
+
+
+def alert_db_row_to_client_json(record: dict[str, Any]) -> dict[str, Any]:
+    """
+    Map a Postgres alerts row or Redis JSON (snake_case) to camelCase for WebSocket clients.
+    """
+    raw = record.get("raw_context")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+
+    out: dict[str, Any] = {}
+    if record.get("id") is not None:
+        out["id"] = str(record["id"])
+    if "log_id" in record:
+        out["logId"] = str(record["log_id"]) if record.get("log_id") else None
+    if "timestamp" in record:
+        out["timestamp"] = _iso_timestamp(record.get("timestamp"))
+    if "severity" in record and record["severity"] is not None:
+        out["severity"] = int(record["severity"])
+    if "anomaly_score" in record and record["anomaly_score"] is not None:
+        out["anomalyScore"] = float(record["anomaly_score"])
+    if "model_used" in record:
+        out["modelUsed"] = record.get("model_used")
+    if "event_type" in record:
+        out["eventType"] = record.get("event_type")
+    if "source_ip" in record:
+        out["sourceIp"] = record.get("source_ip")
+    if "mitre_tactic" in record:
+        out["mitreTactic"] = record.get("mitre_tactic")
+    if "mitre_technique" in record:
+        out["mitreTechnique"] = record.get("mitre_technique")
+    if "technique_id" in record:
+        out["techniqueId"] = record.get("technique_id")
+    if "confidence" in record:
+        out["confidence"] = (
+            float(record["confidence"])
+            if record.get("confidence") is not None
+            else None
+        )
+    if "recommended_action" in record:
+        out["recommendedAction"] = record.get("recommended_action")
+    if "explanation" in record:
+        out["explanation"] = record.get("explanation")
+    if raw is not None or "raw_context" in record:
+        out["rawContext"] = raw
+    if "acknowledged" in record and record["acknowledged"] is not None:
+        out["acknowledged"] = bool(record["acknowledged"])
+    if "created_at" in record:
+        out["createdAt"] = _iso_timestamp(record.get("created_at"))
+    return out
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -283,7 +351,9 @@ async def websocket_alerts(websocket: WebSocket) -> None:
         """SELECT * FROM alerts WHERE acknowledged = false
            ORDER BY timestamp DESC LIMIT 10"""
     )
-    initial = [AlertOut.model_validate(_record_to_dict(r)).model_dump(mode="json") for r in rows]
+    initial = [
+        alert_db_row_to_client_json(_record_to_dict(r)) for r in rows
+    ]
     await websocket.send_json({"type": "initial", "alerts": initial})
     ws_manager.register(websocket)
     try:

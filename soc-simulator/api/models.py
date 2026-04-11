@@ -22,6 +22,9 @@ class AlertOut(BaseModel):
     source_ip: Optional[str] = None
     mitre_tactic: Optional[str] = None
     mitre_technique: Optional[str] = None
+    technique_id: Optional[str] = None
+    confidence: Optional[float] = None
+    recommended_action: Optional[str] = None
     explanation: Optional[str] = None
     raw_context: Optional[dict[str, Any]] = None
     acknowledged: bool = False

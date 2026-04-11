@@ -21,7 +21,7 @@ except ImportError as e:
     raise SystemExit(1) from e
 
 from dotenv import load_dotenv
-from psycopg2.extras import Json
+from psycopg2.extras import Json, RealDictCursor
 
 from explanation_agent import get_explanation
 from isolation_forest_model import IsolationForestDetector
@@ -126,8 +126,8 @@ def insert_alert(
     if_score: float,
     lstm_score: float | None,
     model_used: str,
-    explanation: dict[str, str],
-) -> None:
+    explanation: dict[str, Any],
+) -> dict[str, Any] | None:
     sev = int(round(final_score))
     sev = max(0, min(10, sev))
     raw_context = {
@@ -138,30 +138,47 @@ def insert_alert(
         "model_used": model_used,
     }
     ts = _parse_log_ts(str(log.get("timestamp") or ""))
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO alerts (
-                log_id, timestamp, severity, anomaly_score, model_used, event_type,
-                source_ip, mitre_tactic, mitre_technique, explanation, raw_context, acknowledged
-            ) VALUES (
-                NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE
+    conf = explanation.get("confidence")
+    try:
+        conf_f = float(conf) if conf is not None else None
+    except (TypeError, ValueError):
+        conf_f = None
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO alerts (
+                    log_id, timestamp, severity, anomaly_score, model_used, event_type,
+                    source_ip, mitre_tactic, mitre_technique, technique_id, confidence,
+                    recommended_action, explanation, raw_context, acknowledged
+                ) VALUES (
+                    NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE
+                )
+                RETURNING *
+                """,
+                (
+                    ts,
+                    sev,
+                    float(final_score),
+                    model_used,
+                    log.get("event_type"),
+                    log.get("source_ip"),
+                    explanation.get("mitre_tactic"),
+                    explanation.get("mitre_technique"),
+                    explanation.get("technique_id"),
+                    conf_f,
+                    explanation.get("recommended_action"),
+                    explanation.get("explanation"),
+                    Json(raw_context),
+                ),
             )
-            """,
-            (
-                ts,
-                sev,
-                float(final_score),
-                model_used,
-                log.get("event_type"),
-                log.get("source_ip"),
-                explanation.get("mitre_tactic"),
-                explanation.get("mitre_technique"),
-                explanation.get("explanation"),
-                Json(raw_context),
-            ),
-        )
-    conn.commit()
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        print(f"ml_engine: insert alert failed: {e}")
+        return None
 
 
 def main() -> None:
@@ -252,25 +269,17 @@ def main() -> None:
                     }
                     expl = get_explanation(alert_ctx)
                     try:
-                        insert_alert(conn, log, final_score, if_score, lstm_score, model_used, expl)
+                        row = insert_alert(
+                            conn, log, final_score, if_score, lstm_score, model_used, expl
+                        )
                     except Exception as e:
                         print(f"ml_engine: insert alert failed: {e}", file=sys.stderr)
-                    pub_body = json.dumps(
-                        {
-                            "severity": max(0, min(10, int(round(final_score)))),
-                            "anomaly_score": final_score,
-                            "source_ip": log.get("source_ip"),
-                            "event_type": log.get("event_type"),
-                            "explanation": expl.get("explanation"),
-                            "mitre_tactic": expl.get("mitre_tactic"),
-                            "mitre_technique": expl.get("mitre_technique"),
-                        },
-                        default=str,
-                    )
-                    try:
-                        r.publish(ALERT_CHANNEL, pub_body)
-                    except redis.RedisError as e:
-                        print(f"ml_engine: publish failed: {e}", file=sys.stderr)
+                        row = None
+                    if row:
+                        try:
+                            r.publish(ALERT_CHANNEL, json.dumps(row, default=str))
+                        except redis.RedisError as e:
+                            print(f"ml_engine: publish failed: {e}", file=sys.stderr)
 
                 try:
                     r.xack(STREAM_KEY, GROUP, msg_id)
